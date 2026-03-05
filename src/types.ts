@@ -8,6 +8,8 @@ export interface Person {
   photo: string | null;
   gender: Gender;
   notes: string;
+  x: number;
+  y: number;
 }
 
 export type RelationshipType = 'parent-child' | 'spouse';
@@ -22,24 +24,4 @@ export interface Relationship {
 export interface FamilyTreeData {
   nodes: Person[];
   edges: Relationship[];
-}
-
-export interface LayoutNode extends Person {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface LayoutFamily {
-  id: string;
-  x: number;
-  y: number;
-  spouses: string[];
-  children: string[];
-}
-
-export interface LayoutData {
-  nodes: LayoutNode[];
-  families: LayoutFamily[];
 }

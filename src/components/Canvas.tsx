@@ -1,56 +1,81 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { LayoutData } from '../types';
+import { FamilyTreeData, Person } from '../types';
 import { NodeCard } from './NodeCard';
-import { NODE_WIDTH, NODE_HEIGHT } from '../utils/layout';
+
+export const NODE_WIDTH = 280;
+export const NODE_HEIGHT = 120;
 
 interface CanvasProps {
-  layout: LayoutData;
+  data: FamilyTreeData;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   onAddRelation: (id: string, type: string) => void;
+  onNodeDrag: (id: string, x: number, y: number) => void;
   fitScreenTrigger: number;
+  exportRef: React.RefObject<HTMLDivElement | null>;
 }
 
 export const Canvas: React.FC<CanvasProps> = ({
-  layout,
+  data,
   selectedId,
   onSelect,
   onAddRelation,
+  onNodeDrag,
   fitScreenTrigger,
+  exportRef,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+  
+  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+  const [nodeDragStart, setNodeDragStart] = useState({ mouseX: 0, mouseY: 0, nodeX: 0, nodeY: 0 });
+  const [lastTouchDistance, setLastTouchDistance] = useState<number | null>(null);
 
-  // Handle Pan
-  const handleMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
+  const handlePointerDown = (e: React.PointerEvent) => {
     if (e.target === containerRef.current || (e.target as HTMLElement).tagName === 'svg') {
-      setIsDragging(true);
-      
-      let clientX, clientY;
-      if ('touches' in e) {
-        if (e.touches.length === 1) {
-          clientX = e.touches[0].clientX;
-          clientY = e.touches[0].clientY;
-        } else {
-          return; // Handled by pinch zoom
-        }
-      } else {
-        clientX = e.clientX;
-        clientY = e.clientY;
-      }
-
-      setDragStart({ x: clientX - transform.x, y: clientY - transform.y });
+      setIsPanning(true);
+      setPanStart({ x: e.clientX - transform.x, y: e.clientY - transform.y });
       onSelect(null);
     }
   };
 
-  const [lastTouchDistance, setLastTouchDistance] = useState<number | null>(null);
+  const handleNodePointerDown = (e: React.PointerEvent, node: Person) => {
+    e.stopPropagation();
+    setDraggingNodeId(node.id);
+    setNodeDragStart({
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      nodeX: node.x,
+      nodeY: node.y,
+    });
+    onSelect(node.id);
+  };
 
-  const handleMouseMove = (e: React.MouseEvent | React.TouchEvent) => {
-    if ('touches' in e && e.touches.length === 2) {
-      // Pinch to zoom
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (draggingNodeId) {
+      const deltaX = (e.clientX - nodeDragStart.mouseX) / transform.scale;
+      const deltaY = (e.clientY - nodeDragStart.mouseY) / transform.scale;
+      onNodeDrag(draggingNodeId, nodeDragStart.nodeX + deltaX, nodeDragStart.nodeY + deltaY);
+    } else if (isPanning) {
+      setTransform((prev) => ({
+        ...prev,
+        x: e.clientX - panStart.x,
+        y: e.clientY - panStart.y,
+      }));
+    }
+  };
+
+  const handlePointerUp = () => {
+    setIsPanning(false);
+    setDraggingNodeId(null);
+    setLastTouchDistance(null);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
       const touch1 = e.touches[0];
       const touch2 = e.touches[1];
       const distance = Math.hypot(touch2.clientX - touch1.clientX, touch2.clientY - touch1.clientY);
@@ -61,7 +86,6 @@ export const Canvas: React.FC<CanvasProps> = ({
         let newScale = transform.scale * (1 + scaleFactor);
         newScale = Math.max(0.1, Math.min(newScale, 3));
 
-        // Zoom towards center of pinch
         const centerX = (touch1.clientX + touch2.clientX) / 2;
         const centerY = (touch1.clientY + touch2.clientY) / 2;
         
@@ -77,40 +101,15 @@ export const Canvas: React.FC<CanvasProps> = ({
         }
       }
       setLastTouchDistance(distance);
-      return;
-    }
-
-    if (isDragging) {
-      let clientX, clientY;
-      if ('touches' in e) {
-        clientX = e.touches[0].clientX;
-        clientY = e.touches[0].clientY;
-      } else {
-        clientX = e.clientX;
-        clientY = e.clientY;
-      }
-
-      setTransform((prev) => ({
-        ...prev,
-        x: clientX - dragStart.x,
-        y: clientY - dragStart.y,
-      }));
     }
   };
 
-  const handleMouseUp = () => {
-    setIsDragging(false);
-    setLastTouchDistance(null);
-  };
-
-  // Handle Zoom
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     const scaleFactor = -e.deltaY * 0.001;
     let newScale = transform.scale * (1 + scaleFactor);
-    newScale = Math.max(0.1, Math.min(newScale, 3)); // Clamp scale
+    newScale = Math.max(0.1, Math.min(newScale, 3));
 
-    // Zoom towards mouse pointer
     const rect = containerRef.current?.getBoundingClientRect();
     if (rect) {
       const mouseX = e.clientX - rect.left;
@@ -123,14 +122,13 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
-  // Fit to screen
   useEffect(() => {
-    if (layout.nodes.length === 0 || !containerRef.current) return;
+    if (data.nodes.length === 0 || !containerRef.current) return;
 
-    const minX = Math.min(...layout.nodes.map((n) => n.x));
-    const maxX = Math.max(...layout.nodes.map((n) => n.x + n.width));
-    const minY = Math.min(...layout.nodes.map((n) => n.y));
-    const maxY = Math.max(...layout.nodes.map((n) => n.y + n.height));
+    const minX = Math.min(...data.nodes.map((n) => n.x));
+    const maxX = Math.max(...data.nodes.map((n) => n.x + NODE_WIDTH));
+    const minY = Math.min(...data.nodes.map((n) => n.y));
+    const maxY = Math.max(...data.nodes.map((n) => n.y + NODE_HEIGHT));
 
     const contentWidth = maxX - minX;
     const contentHeight = maxY - minY;
@@ -149,53 +147,79 @@ export const Canvas: React.FC<CanvasProps> = ({
     const newY = containerHeight / 2 - centerY * newScale;
 
     setTransform({ x: newX, y: newY, scale: newScale });
-  }, [layout, fitScreenTrigger]);
+  }, [fitScreenTrigger]); // Only run on fitScreenTrigger
 
-  // Render edges
   const renderEdges = () => {
+    const familiesMap = new Map<string, { spouses: Set<string>; children: Set<string> }>();
+    let familyCounter = 0;
+
+    data.edges.filter(e => e.type === 'spouse').forEach(e => {
+      let foundFamId: string | null = null;
+      for (const [famId, fam] of familiesMap.entries()) {
+        if (fam.spouses.has(e.from) || fam.spouses.has(e.to)) {
+          foundFamId = famId;
+          break;
+        }
+      }
+      if (foundFamId) {
+        const fam = familiesMap.get(foundFamId)!;
+        fam.spouses.add(e.from);
+        fam.spouses.add(e.to);
+      } else {
+        familiesMap.set(`fam_${familyCounter++}`, { spouses: new Set([e.from, e.to]), children: new Set() });
+      }
+    });
+
+    data.edges.filter(e => e.type === 'parent-child').forEach(e => {
+      const parentId = e.from;
+      const childId = e.to;
+      let foundFam = false;
+      for (const fam of familiesMap.values()) {
+        if (fam.spouses.has(parentId)) {
+          fam.children.add(childId);
+          foundFam = true;
+          break;
+        }
+      }
+      if (!foundFam) {
+        familiesMap.set(`fam_${familyCounter++}`, { spouses: new Set([parentId]), children: new Set([childId]) });
+      }
+    });
+
     const paths: React.ReactNode[] = [];
 
-    layout.families.forEach((fam) => {
-      // Draw lines from spouses to family dummy node
-      fam.spouses.forEach((spouseId) => {
-        const spouseNode = layout.nodes.find((n) => n.id === spouseId);
-        if (spouseNode) {
-          const startX = spouseNode.x + NODE_WIDTH / 2;
-          const startY = spouseNode.y + NODE_HEIGHT / 2;
-          const endX = fam.x;
-          const endY = fam.y;
+    familiesMap.forEach((fam, famId) => {
+      const spouseNodes = Array.from(fam.spouses).map(id => data.nodes.find(n => n.id === id)).filter(Boolean) as Person[];
+      if (spouseNodes.length === 0) return;
 
-          // Spouse line (horizontal-ish)
-          const path = `M ${startX} ${startY} C ${startX} ${endY}, ${endX} ${startY}, ${endX} ${endY}`;
-          paths.push(
-            <path
-              key={`spouse-${spouseId}-${fam.id}`}
-              d={path}
-              fill="none"
-              stroke="var(--color-gold-400)"
-              strokeWidth="3"
-              strokeDasharray="6 6"
-              className="opacity-60"
-            />
-          );
-        }
+      const famX = spouseNodes.reduce((sum, n) => sum + n.x, 0) / spouseNodes.length + NODE_WIDTH / 2;
+      const famY = spouseNodes.reduce((sum, n) => sum + n.y, 0) / spouseNodes.length + NODE_HEIGHT / 2;
+
+      spouseNodes.forEach(spouse => {
+        const startX = spouse.x + NODE_WIDTH / 2;
+        const startY = spouse.y + NODE_HEIGHT / 2;
+        paths.push(
+          <path
+            key={`spouse-${spouse.id}-${famId}`}
+            d={`M ${startX} ${startY} L ${famX} ${famY}`}
+            fill="none"
+            stroke="var(--color-gold-400)"
+            strokeWidth="3"
+            strokeDasharray="6 6"
+            className="opacity-60"
+          />
+        );
       });
 
-      // Draw lines from family dummy node to children
-      fam.children.forEach((childId) => {
-        const childNode = layout.nodes.find((n) => n.id === childId);
+      fam.children.forEach(childId => {
+        const childNode = data.nodes.find(n => n.id === childId);
         if (childNode) {
-          const startX = fam.x;
-          const startY = fam.y;
           const endX = childNode.x + NODE_WIDTH / 2;
           const endY = childNode.y;
-
-          // Parent-child line (vertical-ish)
-          const path = `M ${startX} ${startY} C ${startX} ${startY + 50}, ${endX} ${endY - 50}, ${endX} ${endY}`;
           paths.push(
             <path
-              key={`child-${fam.id}-${childId}`}
-              d={path}
+              key={`child-${famId}-${childId}`}
+              d={`M ${famX} ${famY} C ${famX} ${famY + 50}, ${endX} ${endY - 50}, ${endX} ${endY}`}
               fill="none"
               stroke="var(--color-forest-600)"
               strokeWidth="4"
@@ -213,45 +237,43 @@ export const Canvas: React.FC<CanvasProps> = ({
   return (
     <div
       ref={containerRef}
-      className="w-full h-screen overflow-hidden cursor-grab active:cursor-grabbing"
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-      onTouchStart={handleMouseDown}
-      onTouchMove={handleMouseMove}
-      onTouchEnd={handleMouseUp}
-      onTouchCancel={handleMouseUp}
+      className="w-full h-screen overflow-hidden cursor-grab active:cursor-grabbing touch-none"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={handlePointerUp}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={() => setLastTouchDistance(null)}
       onWheel={handleWheel}
     >
       <div
+        ref={exportRef}
         style={{
           transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
           transformOrigin: '0 0',
-          width: 0,
-          height: 0,
         }}
-        className="relative transition-transform duration-75 ease-out"
+        className="relative w-full h-full transition-transform duration-75 ease-out"
       >
-        <svg className="absolute top-0 left-0 overflow-visible pointer-events-none">
+        <svg className="absolute top-0 left-0 w-full h-full overflow-visible pointer-events-none">
           {renderEdges()}
         </svg>
 
-        {layout.nodes.map((node) => (
+        {data.nodes.map((node) => (
           <div
             key={node.id}
-            className="absolute"
+            className="absolute touch-none"
             style={{
               left: node.x,
               top: node.y,
-              width: node.width,
-              height: node.height,
+              width: NODE_WIDTH,
+              height: NODE_HEIGHT,
+              cursor: draggingNodeId === node.id ? 'grabbing' : 'grab',
             }}
+            onPointerDown={(e) => handleNodePointerDown(e, node)}
           >
             <NodeCard
               person={node}
               isSelected={selectedId === node.id}
-              onClick={onSelect}
               onAddRelation={onAddRelation}
             />
           </div>

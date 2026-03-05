@@ -13,6 +13,8 @@ export const createDefaultTree = (): FamilyTreeData => {
     photo: null,
     gender: 'neutral',
     notes: 'Start building your family tree from here.',
+    x: 0,
+    y: 0,
   };
   return {
     nodes: [you],
@@ -24,7 +26,14 @@ export const loadTree = (): FamilyTreeData => {
   try {
     const data = localStorage.getItem(STORAGE_KEY);
     if (data) {
-      return JSON.parse(data);
+      // Ensure existing nodes have x and y
+      const parsed = JSON.parse(data) as FamilyTreeData;
+      parsed.nodes = parsed.nodes.map(n => ({
+        ...n,
+        x: n.x ?? 0,
+        y: n.y ?? 0,
+      }));
+      return parsed;
     }
   } catch (e) {
     console.error('Failed to load tree from local storage', e);
@@ -38,45 +47,4 @@ export const saveTree = (data: FamilyTreeData) => {
   } catch (e) {
     console.error('Failed to save tree to local storage', e);
   }
-};
-
-export const exportTree = (data: FamilyTreeData) => {
-  const dataStr = JSON.stringify(data, null, 2);
-  const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
-  const exportFileDefaultName = 'family-tree.json';
-
-  const linkElement = document.createElement('a');
-  linkElement.setAttribute('href', dataUri);
-  linkElement.setAttribute('download', exportFileDefaultName);
-  linkElement.click();
-};
-
-export const importTree = (): Promise<FamilyTreeData> => {
-  return new Promise((resolve, reject) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json,application/json';
-    input.onchange = (e: any) => {
-      const file = e.target.files[0];
-      if (!file) {
-        reject('No file selected');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        try {
-          const data = JSON.parse(event.target?.result as string);
-          if (data.nodes && data.edges) {
-            resolve(data);
-          } else {
-            reject('Invalid file format');
-          }
-        } catch (err) {
-          reject('Failed to parse JSON');
-        }
-      };
-      reader.readAsText(file);
-    };
-    input.click();
-  });
 };

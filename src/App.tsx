@@ -1,16 +1,17 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { Person, Relationship, FamilyTreeData, LayoutData } from './types';
-import { loadTree, saveTree, exportTree, importTree } from './utils/storage';
-import { getLayout } from './utils/layout';
-import { Canvas } from './components/Canvas';
+import { Person, FamilyTreeData } from './types';
+import { loadTree, saveTree } from './utils/storage';
+import { Canvas, NODE_WIDTH, NODE_HEIGHT } from './components/Canvas';
 import { Toolbar } from './components/Toolbar';
 import { EditPanel } from './components/EditPanel';
+import * as htmlToImage from 'html-to-image';
 
 export default function App() {
   const [data, setData] = useState<FamilyTreeData>({ nodes: [], edges: [] });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [fitScreenTrigger, setFitScreenTrigger] = useState(0);
+  const exportRef = useRef<HTMLDivElement>(null);
 
   // Load data on mount
   useEffect(() => {
@@ -24,11 +25,6 @@ export default function App() {
     }
   }, [data]);
 
-  const layout: LayoutData = useMemo(() => {
-    if (data.nodes.length === 0) return { nodes: [], families: [] };
-    return getLayout(data.nodes, data.edges);
-  }, [data]);
-
   const handleAddPerson = () => {
     const newPerson: Person = {
       id: uuidv4(),
@@ -38,6 +34,8 @@ export default function App() {
       photo: null,
       gender: 'neutral',
       notes: '',
+      x: 0,
+      y: 0,
     };
     setData((prev) => ({
       ...prev,
@@ -47,6 +45,19 @@ export default function App() {
   };
 
   const handleAddRelation = (sourceId: string, type: string) => {
+    const sourceNode = data.nodes.find(n => n.id === sourceId);
+    const baseX = sourceNode ? sourceNode.x : 0;
+    const baseY = sourceNode ? sourceNode.y : 0;
+
+    let newX = baseX;
+    let newY = baseY;
+
+    if (type === 'add-father') { newX = baseX - 160; newY = baseY - 200; }
+    else if (type === 'add-mother') { newX = baseX + 160; newY = baseY - 200; }
+    else if (type === 'add-spouse') { newX = baseX + 320; newY = baseY; }
+    else if (type === 'add-son' || type === 'add-daughter') { newX = baseX + (Math.random() * 100 - 50); newY = baseY + 200; }
+    else if (type === 'add-sibling') { newX = baseX + 320; newY = baseY; }
+
     const newPerson: Person = {
       id: uuidv4(),
       name: 'New Person',
@@ -55,6 +66,8 @@ export default function App() {
       photo: null,
       gender: type.includes('father') || type.includes('son') ? 'male' : type.includes('mother') || type.includes('daughter') ? 'female' : 'neutral',
       notes: '',
+      x: newX,
+      y: newY,
     };
 
     const newEdges = [...data.edges];
@@ -66,16 +79,12 @@ export default function App() {
     } else if (type === 'add-spouse') {
       newEdges.push({ id: uuidv4(), type: 'spouse', from: sourceId, to: newPerson.id });
     } else if (type === 'add-sibling') {
-      // Find parents of sourceId
       const parents = data.edges.filter((e) => e.type === 'parent-child' && e.to === sourceId).map((e) => e.from);
       if (parents.length > 0) {
         parents.forEach((p) => {
           newEdges.push({ id: uuidv4(), type: 'parent-child', from: p, to: newPerson.id });
         });
       } else {
-        // If no parents, maybe just add a dummy parent or just add the person.
-        // For simplicity, we just add the person without edges if no parents exist.
-        // Or better, create a dummy parent.
         const dummyParent: Person = {
           id: uuidv4(),
           name: 'Unknown Parent',
@@ -84,6 +93,8 @@ export default function App() {
           photo: null,
           gender: 'neutral',
           notes: '',
+          x: baseX + 160,
+          y: baseY - 200,
         };
         setData((prev) => ({
           nodes: [...prev.nodes, dummyParent, newPerson],
@@ -105,6 +116,13 @@ export default function App() {
     setSelectedId(newPerson.id);
   };
 
+  const handleNodeDrag = (id: string, x: number, y: number) => {
+    setData((prev) => ({
+      ...prev,
+      nodes: prev.nodes.map((n) => (n.id === id ? { ...n, x, y } : n)),
+    }));
+  };
+
   const handleSavePerson = (updatedPerson: Person) => {
     setData((prev) => ({
       ...prev,
@@ -120,13 +138,38 @@ export default function App() {
     setSelectedId(null);
   };
 
-  const handleImport = async () => {
+  const handleExportImage = async () => {
+    if (!exportRef.current || data.nodes.length === 0) return;
+
+    // Calculate bounding box
+    const minX = Math.min(...data.nodes.map((n) => n.x));
+    const maxX = Math.max(...data.nodes.map((n) => n.x + NODE_WIDTH));
+    const minY = Math.min(...data.nodes.map((n) => n.y));
+    const maxY = Math.max(...data.nodes.map((n) => n.y + NODE_HEIGHT));
+
+    const width = maxX - minX + 200;
+    const height = maxY - minY + 200;
+
+    const originalTransform = exportRef.current.style.transform;
+    // Reset transform to capture the full bounding box
+    exportRef.current.style.transform = `translate(${-minX + 100}px, ${-minY + 100}px) scale(1)`;
+
     try {
-      const importedData = await importTree();
-      setData(importedData);
-      setFitScreenTrigger((prev) => prev + 1);
-    } catch (e) {
-      alert(e);
+      const dataUrl = await htmlToImage.toPng(exportRef.current, {
+        width,
+        height,
+        pixelRatio: 2,
+        backgroundColor: '#F4F0E6', // parchment background
+      });
+      const link = document.createElement('a');
+      link.download = 'family-tree.png';
+      link.href = dataUrl;
+      link.click();
+    } catch (err) {
+      console.error('Failed to export image', err);
+      alert('Failed to export image. Please try again.');
+    } finally {
+      exportRef.current.style.transform = originalTransform;
     }
   };
 
@@ -146,19 +189,20 @@ export default function App() {
         </div>
       ) : (
         <Canvas
-          layout={layout}
+          data={data}
           selectedId={selectedId}
           onSelect={setSelectedId}
           onAddRelation={handleAddRelation}
+          onNodeDrag={handleNodeDrag}
           fitScreenTrigger={fitScreenTrigger}
+          exportRef={exportRef}
         />
       )}
 
       <Toolbar
         onAddPerson={handleAddPerson}
         onFitScreen={() => setFitScreenTrigger((prev) => prev + 1)}
-        onExport={() => exportTree(data)}
-        onImport={handleImport}
+        onExportImage={handleExportImage}
       />
 
       <EditPanel
